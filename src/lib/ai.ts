@@ -74,21 +74,21 @@ function openAICompatible(cfg: {
 }
 
 function makeProvider(): AIProvider {
-  const provider = (process.env.AI_PROVIDER ?? "groq").toLowerCase();
+  const provider = (process.env.AI_PROVIDER || "groq").toLowerCase();
   switch (provider) {
     case "gemini":
       return openAICompatible({
         name: "gemini",
         baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
         apiKey: process.env.GEMINI_API_KEY,
-        model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash",
+        model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
       });
     case "openrouter":
       return openAICompatible({
         name: "openrouter",
         baseUrl: "https://openrouter.ai/api/v1",
         apiKey: process.env.OPENROUTER_API_KEY,
-        model: process.env.OPENROUTER_MODEL ?? "meta-llama/llama-3.3-70b-instruct",
+        model: process.env.OPENROUTER_MODEL || "meta-llama/llama-3.3-70b-instruct",
       });
     case "groq":
     default:
@@ -96,7 +96,7 @@ function makeProvider(): AIProvider {
         name: "groq",
         baseUrl: "https://api.groq.com/openai/v1",
         apiKey: process.env.GROQ_API_KEY,
-        model: process.env.GROQ_MODEL ?? "openai/gpt-oss-120b",
+        model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
       });
   }
 }

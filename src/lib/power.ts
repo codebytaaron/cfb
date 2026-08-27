@@ -173,23 +173,23 @@ export async function computePowerRankings(
 
   // Preseason / no games: rank purely on carry-over Elo + SP.
   if (rowsRaw.every((r) => r.wins + r.losses === 0)) {
-    const pre = [...eloLatest.entries()]
-      .map(([team, e]) => ({
-        team,
-        conference: agg.get(team)?.conference,
-        score: Math.round(clamp((e - 1300) / 700, 0, 1) * 1000) / 10,
-        elo: Math.round(e),
-        wins: 0,
-        losses: 0,
-        pointDiff: 0,
-        sos: 1500,
-        quadWins: 0,
-        badLosses: 0,
-        trend: 0,
-      }))
-      .sort((a, b) => b.elo - a.elo)
-      .slice(0, limit)
-      .map((r, i) => ({ ...r, rank: i + 1 }));
+    const ranked = [...eloLatest.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+    const hi = ranked[0]?.[1] ?? 2000;
+    const lo = ranked[ranked.length - 1]?.[1] ?? 1500;
+    const pre = ranked.map(([team, e], i) => ({
+      team,
+      conference: agg.get(team)?.conference,
+      score: Math.round((60 + 40 * ((e - lo) / Math.max(1, hi - lo))) * 10) / 10,
+      elo: Math.round(e),
+      wins: 0,
+      losses: 0,
+      pointDiff: 0,
+      sos: 0,
+      quadWins: 0,
+      badLosses: 0,
+      trend: 0,
+      rank: i + 1,
+    }));
     return { year, generatedAt: new Date().toISOString(), rows: pre };
   }
 

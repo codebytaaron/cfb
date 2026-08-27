@@ -17,12 +17,15 @@ export default function PowerTable() {
   if (err) return <p className="prose" style={{ color: "var(--red)" }}>Model error: {err}</p>;
   if (!data) return <p><span className="spin" /> computing model & generating explanations…</p>;
 
+  const preseason = data.rows.every((r: any) => r.wins + r.losses === 0);
+
   return (
     <>
       <p className="prose" style={{ color: "var(--ink-soft)", marginBottom: 14 }}>
-        Model inputs: latest Elo, SP+ rating, win %, per-game point differential, strength of
-        schedule, quality wins and bad losses. Generated{" "}
-        {new Date(data.generatedAt).toLocaleString()}.
+        {preseason
+          ? "Preseason: no games played yet — ranked on carry-over Elo and SP+ from last season. Full model (point differential, strength of schedule, quality wins, bad losses) kicks in week 1. "
+          : "Model inputs: latest Elo, SP+ rating, win %, per-game point differential, strength of schedule, quality wins and bad losses. "}
+        Generated {new Date(data.generatedAt).toLocaleString()}.
       </p>
       <table>
         <thead>
@@ -32,9 +35,9 @@ export default function PowerTable() {
             <th>Score</th>
             <th>Rec</th>
             <th>Elo</th>
-            <th>Pt Diff</th>
-            <th>SoS</th>
-            <th>Trend</th>
+            {!preseason && <th>Pt Diff</th>}
+            {!preseason && <th>SoS</th>}
+            {!preseason && <th>Trend</th>}
           </tr>
         </thead>
         <tbody>
@@ -54,17 +57,21 @@ export default function PowerTable() {
                 <td className="big-num" style={{ fontSize: 16 }}>{r.score}</td>
                 <td className="mono">{r.wins}-{r.losses}</td>
                 <td className="mono">{r.elo}</td>
-                <td className="mono" style={{ color: r.pointDiff >= 0 ? "var(--green)" : "var(--red)" }}>
-                  {r.pointDiff > 0 ? "+" : ""}{r.pointDiff}
-                </td>
-                <td className="mono">{r.sos}</td>
-                <td className="mono" style={{ color: r.trend > 0 ? "var(--green)" : r.trend < 0 ? "var(--red)" : "var(--ink-soft)" }}>
-                  {r.trend > 0 ? "▲" : r.trend < 0 ? "▼" : "–"} {Math.abs(r.trend)}
-                </td>
+                {!preseason && (
+                  <td className="mono" style={{ color: r.pointDiff >= 0 ? "var(--green)" : "var(--red)" }}>
+                    {r.pointDiff > 0 ? "+" : ""}{r.pointDiff}
+                  </td>
+                )}
+                {!preseason && <td className="mono">{r.sos || "—"}</td>}
+                {!preseason && (
+                  <td className="mono" style={{ color: r.trend > 0 ? "var(--green)" : r.trend < 0 ? "var(--red)" : "var(--ink-soft)" }}>
+                    {r.trend > 0 ? "▲" : r.trend < 0 ? "▼" : "–"} {Math.abs(r.trend)}
+                  </td>
+                )}
               </tr>
               {openRow === r.team && (
                 <tr>
-                  <td colSpan={8} style={{ background: "var(--paper)" }}>
+                  <td colSpan={preseason ? 4 : 8} style={{ background: "var(--paper)" }}>
                     <div className="prose fade-in">{r.note || "No explanation generated for this team."}</div>
                   </td>
                 </tr>
