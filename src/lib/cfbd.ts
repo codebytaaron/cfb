@@ -110,15 +110,21 @@ export type TeamRecord = {
 export const getTeams = (year?: number) =>
   cfbd<Team[]>("/teams/fbs", year ? { year } : {}, 86400);
 
-export const getGames = (
+export const getGames = async (
   year: number,
-  opts: { week?: number; seasonType?: string; team?: string } = {},
-) =>
-  cfbd<Game[]>(
+  opts: { week?: number; seasonType?: string; team?: string; fbsOnly?: boolean } = {},
+) => {
+  const games = await cfbd<Game[]>(
     "/games",
     { year, seasonType: opts.seasonType ?? "both", week: opts.week, team: opts.team },
-    120,
+    opts.team ? 120 : 300, // CFBD free tier is 1000 req/month — cache the big list longer
   );
+  // Default to FBS-vs-FBS so lists aren't dominated by D2/D3 openers; a team
+  // query keeps everything (an FBS team's cupcake games still matter to it).
+  if (opts.fbsOnly === false || opts.team) return games;
+  const nonFbs = (c?: string) => c && c !== "fbs";
+  return games.filter((g) => !nonFbs(g.homeClassification) && !nonFbs(g.awayClassification));
+};
 
 export const getRankings = (year: number, seasonType = "regular", week?: number) =>
   cfbd<RankingWeek[]>("/rankings", { year, seasonType, week }, 600);
