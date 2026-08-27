@@ -1,0 +1,18 @@
+# Vercel Hobby only allows once-daily cron, so the always-updating pipeline is
+# driven from GitHub Actions instead. Set repo secrets:
+#   PIPELINE_URL  = https://<your-deployment>.vercel.app
+#   CRON_SECRET   = same value as the CRON_SECRET env var on Vercel
+name: gridiron-pipeline
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger AI pipeline
+        run: |
+          curl -sS -m 110 -X GET \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.PIPELINE_URL }}/api/cron/refresh" | head -c 2000
