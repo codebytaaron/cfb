@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { AI, GUARDRAILS } from "@/lib/ai";
+import { AI, GUARDRAILS, RateLimited } from "@/lib/ai";
 
 export const maxDuration = 45;
 
@@ -21,10 +21,12 @@ export async function POST(req: NextRequest) {
         },
         { role: "user", content: `Explain this: ${topic}\n\nDATA:\n${JSON.stringify(data ?? {})}` },
       ],
-      { temperature: 0.4, maxTokens: depth === "deep" ? 700 : 300 },
+      { temperature: 0.4, maxTokens: depth === "deep" ? 550 : 260 },
     );
     return NextResponse.json({ text });
   } catch (e: any) {
+    if (e instanceof RateLimited)
+      return NextResponse.json({ text: "The AI is briefly at its free-tier rate limit. Try again in a few seconds." });
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }

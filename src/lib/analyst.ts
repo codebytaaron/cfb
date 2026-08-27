@@ -1,15 +1,10 @@
-import { AI, GUARDRAILS } from "./ai";
+import { AI, GUARDRAILS, RateLimited } from "./ai";
 import { cacheGet, cacheSet } from "./store";
-import {
-  getGames,
-  getRecords,
-  getTeamStats,
-  type Game,
-} from "./cfbd";
+import { getGames, getRecords, getTeamStats, type Game } from "./cfbd";
 import { computePowerRankings } from "./power";
 import { latestRankingWeek, seasonContext } from "./season";
 
-async function say(system: string, user: string, temp = 0.4, maxTokens = 700) {
+async function say(system: string, user: string, temp = 0.4, maxTokens = 600) {
   return AI.complete(
     [
       { role: "system", content: `${GUARDRAILS}\n${system}` },
@@ -19,55 +14,48 @@ async function say(system: string, user: string, temp = 0.4, maxTokens = 700) {
   );
 }
 
+function firstJson(raw: string, open: "{" | "[") {
+  const close = open === "{" ? "}" : "]";
+  return JSON.parse(raw.slice(raw.indexOf(open), raw.lastIndexOf(close) + 1));
+}
+
 // ---------- Game analysis ----------
 export async function analyzeGame(game: Game, question?: string) {
   const key = `game:${game.id}:${game.homePoints}-${game.awayPoints}:${game.completed}:${question ?? "auto"}`;
-  const cached = await cacheGet(key, question ? 120 : 600);
+  const cached = await cacheGet(key, question ? 120 : 900);
   if (cached) return cached;
 
   const [homeRec, awayRec] = await Promise.all([
     getRecords(game.season, game.homeTeam).catch(() => []),
     getRecords(game.season, game.awayTeam).catch(() => []),
   ]);
+  const side = (home: boolean) => ({
+    team: home ? game.homeTeam : game.awayTeam,
+    points: home ? game.homePoints : game.awayPoints,
+    byQuarter: home ? game.homeLineScores : game.awayLineScores,
+    pregameElo: home ? game.homePregameElo : game.awayPregameElo,
+    winProb: home ? game.homePostgameWinProbability : game.awayPostgameWinProbability,
+    record: (home ? homeRec : awayRec)[0]?.total,
+  });
   const data = {
-    status: game.completed ? "FINAL" : new Date(game.startDate) <= new Date() ? "LIVE/IN-PROGRESS" : "SCHEDULED",
+    status: game.completed ? "FINAL" : new Date(game.startDate) <= new Date() ? "LIVE" : "SCHEDULED",
     week: game.week,
     seasonType: game.seasonType,
-    kickoff: game.startDate,
     venue: game.venue,
-    neutralSite: game.neutralSite,
     notes: game.notes,
-    home: {
-      team: game.homeTeam,
-      conference: game.homeConference,
-      points: game.homePoints,
-      byQuarter: game.homeLineScores,
-      pregameElo: game.homePregameElo,
-      postgameElo: game.homePostgameElo,
-      postgameWinProb: game.homePostgameWinProbability,
-      record: homeRec[0]?.total,
-    },
-    away: {
-      team: game.awayTeam,
-      conference: game.awayConference,
-      points: game.awayPoints,
-      byQuarter: game.awayLineScores,
-      pregameElo: game.awayPregameElo,
-      postgameElo: game.awayPostgameElo,
-      postgameWinProb: game.awayPostgameWinProbability,
-      record: awayRec[0]?.total,
-    },
+    home: side(true),
+    away: side(false),
     excitementIndex: game.excitementIndex,
   };
 
   const system = game.completed
-    ? "Write an AI GAME SUMMARY. Cover: final result, the turning point, key statistic, what it means for the playoff/conference picture. 120-160 words. Plain prose, no headers."
-    : "You are the live AI analyst for this game. Give a concise read of the current state: who is in control, why, and what each team needs to do next. 90-130 words.";
+    ? "Write an AI GAME SUMMARY: final result, the turning point, one key stat, playoff/conference meaning. 90-130 words, plain prose."
+    : "You are the live AI analyst. Concise read: who's in control and why, what each team needs next. 70-110 words.";
   const user = question
-    ? `DATA:\n${JSON.stringify(data)}\n\nFan question: "${question}"\nAnswer using only the data above.`
+    ? `DATA:\n${JSON.stringify(data)}\n\nFan question: "${question}"\nAnswer only from the data.`
     : `DATA:\n${JSON.stringify(data)}`;
 
-  const text = await say(system, user, 0.45, 500);
+  const text = await say(system, user, 0.45, 380);
   await cacheSet(key, "game-analysis", text);
   return text;
 }
@@ -76,62 +64,102 @@ export async function analyzeGame(game: Game, question?: string) {
 export async function explainedPowerRankings(year: number) {
   const key = `power-explained:${year}`;
   const cached = await cacheGet(key, 1800);
-  if (cached) return cached;
+  if (cached && !cached.degraded) return cached;
+  if (cached?.degraded && Date.now() - +new Date(cached.generatedAt) < 300_000) return cached;
 
   const pr = await computePowerRankings(year, 25);
-  const top = pr.rows.slice(0, 12);
+  const top = pr.rows.slice(0, 10).map((r) => ({
+    team: r.team,
+    rank: r.rank,
+    elo: r.elo,
+    rec: `${r.wins}-${r.losses}`,
+    ptDiff: r.pointDiff,
+    sos: r.sos,
+  }));
   const preseason = pr.rows.every((r) => r.wins + r.losses === 0);
   const system = preseason
-    ? "This is a PRESEASON model driven by carry-over Elo from last season. For each team give ONE sentence (max 26 words) explaining what its Elo rating says about it entering the year. Do not mention missing/zero stats or placeholders. Return strict JSON array [{\"team\":\"..\",\"note\":\"..\"}]. No other text."
-    : "For each team give ONE sentence (max 28 words) explaining its position, citing its actual numbers (Elo, record, point differential, SoS, quality wins, bad losses). Return strict JSON array: [{\"team\":\"..\",\"note\":\"..\"}]. No other text.";
-  const user = `Ranking model output (already computed — do not re-rank):\n${JSON.stringify(top)}`;
-  let notes: Record<string, string> = {};
+    ? 'PRESEASON model (carry-over Elo). One sentence per team, max 24 words, on what its Elo says entering the year. No mention of zero/missing stats. Strict JSON array [{"team","note"}] only.'
+    : 'One sentence per team, max 26 words, citing its numbers (Elo, record, point diff, SoS). Strict JSON array [{"team","note"}] only.';
+
+  const notes: Record<string, string> = {};
+  let degraded = false;
   try {
-    const raw = await say(system, user, 0.3, 900);
-    const arr = JSON.parse(raw.slice(raw.indexOf("["), raw.lastIndexOf("]") + 1));
-    for (const x of arr) notes[x.team] = x.note;
-  } catch {
-    /* notes optional */
+    const raw = await say(system, JSON.stringify(top), 0.3, 650);
+    for (const x of firstJson(raw, "[")) if (x?.team) notes[x.team] = x.note;
+  } catch (e) {
+    degraded = e instanceof RateLimited;
   }
-  const out = { ...pr, rows: pr.rows.map((r) => ({ ...r, note: notes[r.team] ?? null })) };
+  const out = {
+    ...pr,
+    degraded,
+    generatedAt: new Date().toISOString(),
+    rows: pr.rows.map((r) => ({ ...r, note: notes[r.team] ?? null })),
+  };
   await cacheSet(key, "power-rankings", out);
   return out;
 }
 
 // ---------- Daily briefing ----------
+function briefingFallback(data: any, ctx: any) {
+  const top = data.poll?.top15 ?? [];
+  return {
+    date: data.today,
+    phase: ctx.phase,
+    degraded: true,
+    headline: top[0]
+      ? `${String(top[0]).replace(/^\d+\s/, "")} opens on top of the ${data.poll.name}`
+      : `College football — ${ctx.phase}, ${ctx.year}`,
+    yourTeams: (data.favorites ?? []).map((t: string) => ({
+      team: t,
+      note: `Ranked context and results for ${t} are on its team page.`,
+    })),
+    topStories: [
+      data.poll?.name && { title: `${data.poll.name} released`, detail: `Top five: ${top.slice(0, 5).map((s: string) => s.replace(/^\d+\s/, "")).join(", ")}.` },
+      data.powerTop10?.[0] && { title: "Gridiron AI power model", detail: `Model favorite entering play: ${data.powerTop10[0]}.` },
+      data.recentResults?.[0] && { title: "Latest results", detail: data.recentResults.slice(0, 3).map((r: any) => r.g).join(" · ") },
+    ].filter(Boolean),
+    gamesToWatch: (data.upcomingGames ?? []).slice(0, 4).map((g: any) => ({
+      matchup: g.g,
+      why: `Week ${g.wk}, ${String(g.when).slice(0, 10)}.`,
+    })),
+    outlook: "AI commentary is briefly rate-limited — this view is built straight from the data feed and will fill in shortly.",
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 export async function dailyBriefing(favorites: string[] = []) {
   const ctx = await seasonContext();
   const key = `briefing:${ctx.year}:${new Date().toISOString().slice(0, 10)}:${favorites.slice().sort().join(",")}`;
   const cached = await cacheGet(key, 3 * 3600);
-  if (cached) return cached;
+  if (cached && !cached.degraded) return cached;
 
   const [games, ranking, power] = await Promise.all([
     getGames(ctx.year, { seasonType: "both" }).catch(() => [] as Game[]),
     latestRankingWeek(ctx.year),
-    computePowerRankings(ctx.year, 15).catch(() => null),
+    computePowerRankings(ctx.year, 12).catch(() => null),
   ]);
 
   const now = Date.now();
   const recent = games
     .filter((g) => g.completed)
     .sort((a, b) => +new Date(b.startDate) - +new Date(a.startDate))
-    .slice(0, 12)
-    .map((g) => ({ g: `${g.awayTeam} ${g.awayPoints} @ ${g.homeTeam} ${g.homePoints}`, wk: g.week, ei: g.excitementIndex }));
+    .slice(0, 6)
+    .map((g) => ({ g: `${g.awayTeam} ${g.awayPoints} @ ${g.homeTeam} ${g.homePoints}`, wk: g.week }));
   const upcoming = games
     .filter((g) => !g.completed && +new Date(g.startDate) > now)
     .sort((a, b) => +new Date(a.startDate) - +new Date(b.startDate))
-    .slice(0, 14)
+    .slice(0, 8)
     .map((g) => ({ g: `${g.awayTeam} @ ${g.homeTeam}`, when: g.startDate, wk: g.week }));
 
   const ap =
-    ranking?.polls.find((p) => /AP|Coaches|Playoff/i.test(p.poll))?.ranks.slice(0, 15).map((r) => `${r.rank} ${r.school}`) ?? [];
+    ranking?.polls.find((p) => /Playoff|AP|Coaches/i.test(p.poll))?.ranks.slice(0, 12).map((r) => `${r.rank} ${r.school}`) ?? [];
 
   const data = {
     today: new Date().toISOString().slice(0, 10),
     phase: ctx.phase,
     season: ctx.year,
     poll: { name: ranking?.polls[0]?.poll, top15: ap },
-    powerTop10: power?.rows.slice(0, 10).map((r) => `${r.rank} ${r.team} (${r.wins}-${r.losses}, Elo ${r.elo})`),
+    powerTop10: power?.rows.slice(0, 8).map((r) => `${r.rank} ${r.team} (${r.wins}-${r.losses}, Elo ${r.elo})`),
     recentResults: recent,
     upcomingGames: upcoming,
     favorites,
@@ -139,16 +167,16 @@ export async function dailyBriefing(favorites: string[] = []) {
 
   const system = `Produce the DAILY COLLEGE FOOTBALL BRIEFING as strict JSON:
 {"date":"","phase":"","headline":"","yourTeams":[{"team":"","note":""}],"topStories":[{"title":"","detail":""}],"gamesToWatch":[{"matchup":"","why":""}],"outlook":""}
-- 3-5 topStories, 3-4 gamesToWatch. Every claim must trace to the DATA. If favorites is non-empty, yourTeams covers each; otherwise return [].
-- detail/note/why: 1-2 sentences each. No markdown. Return JSON only.`;
-  const raw = await say(system, `DATA:\n${JSON.stringify(data)}`, 0.5, 1400);
+3-4 topStories, 3-4 gamesToWatch. Every claim traces to DATA. favorites empty -> yourTeams []. 1-2 sentences per field. JSON only.`;
+
   let json: any;
   try {
-    json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+    json = firstJson(await say(system, `DATA:\n${JSON.stringify(data)}`, 0.5, 900), "{");
+    json.generatedAt = new Date().toISOString();
+    json.degraded = false;
   } catch {
-    json = { date: data.today, phase: ctx.phase, headline: "Briefing unavailable", topStories: [], gamesToWatch: [], yourTeams: [], outlook: raw.slice(0, 400) };
+    json = briefingFallback(data, ctx);
   }
-  json.generatedAt = new Date().toISOString();
   await cacheSet(key, "briefing", json);
   return json;
 }
@@ -158,7 +186,7 @@ export async function teamReport(teamName: string) {
   const ctx = await seasonContext();
   const key = `team-report:${teamName}:${ctx.year}:${ctx.week}`;
   const cached = await cacheGet(key, 6 * 3600);
-  if (cached) return cached;
+  if (cached && !cached.degraded) return cached;
 
   const [records, games, stats, powerNow, powerPrev] = await Promise.all([
     getRecords(ctx.year, teamName).catch(() => []),
@@ -174,12 +202,12 @@ export async function teamReport(teamName: string) {
       const home = g.homeTeam === teamName;
       const us = home ? g.homePoints : g.awayPoints;
       const them = home ? g.awayPoints : g.homePoints;
-      const opp = home ? g.awayTeam : g.homeTeam;
-      return { opp, us, them, w: (us ?? 0) > (them ?? 0), wk: g.week, oppElo: home ? g.awayPregameElo : g.homePregameElo };
+      return { opp: home ? g.awayTeam : g.homeTeam, us, them, w: (us ?? 0) > (them ?? 0), wk: g.week };
     });
   const schedule = games
     .filter((g) => !g.completed)
-    .map((g) => ({ opp: g.homeTeam === teamName ? g.awayTeam : g.homeTeam, when: g.startDate, wk: g.week }));
+    .slice(0, 12)
+    .map((g) => ({ opp: g.homeTeam === teamName ? g.awayTeam : g.homeTeam, when: g.startDate.slice(0, 10), wk: g.week }));
 
   const statLine: Record<string, number> = {};
   for (const s of stats) if (s?.statName) statLine[s.statName] = s.statValue;
@@ -192,7 +220,7 @@ export async function teamReport(teamName: string) {
     phase: ctx.phase,
     record: records[0]?.total,
     conference: records[0]?.conference,
-    powerRank: powerRow ? { rank: powerRow.rank, score: powerRow.score, elo: powerRow.elo, sos: powerRow.sos, trend: powerRow.trend } : null,
+    powerRank: powerRow ? { rank: powerRow.rank, score: powerRow.score, elo: powerRow.elo, trend: powerRow.trend } : null,
     lastSeasonPowerRank: lastYearRow?.rank ?? null,
     results,
     remainingSchedule: schedule,
@@ -201,15 +229,26 @@ export async function teamReport(teamName: string) {
 
   const system = `Produce a TEAM REPORT as strict JSON:
 {"team":"","summary":"","biggestStrength":"","biggestWeakness":"","playerToWatch":"","mostImportantGame":"","playoffOutlook":""}
-- summary 2-3 sentences. Each other field 1-2 sentences, grounded in the DATA numbers.
-- playerToWatch: only name a player if one appears in the data; otherwise describe a unit/role. Never invent a name.
-- Return JSON only.`;
-  const raw = await say(system, `DATA:\n${JSON.stringify(data)}`, 0.45, 900);
+summary 2-3 sentences; other fields 1-2, grounded in DATA numbers. Only name a player if one is in the data, else describe a unit. JSON only.`;
+
   let json: any;
   try {
-    json = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
-  } catch {
-    json = { team: teamName, summary: raw.slice(0, 500), biggestStrength: "", biggestWeakness: "", playerToWatch: "", mostImportantGame: "", playoffOutlook: "" };
+    json = firstJson(await say(system, `DATA:\n${JSON.stringify(data)}`, 0.45, 700), "{");
+    json.degraded = false;
+  } catch (e) {
+    json = {
+      team: teamName,
+      summary:
+        e instanceof RateLimited
+          ? "The AI write-up is briefly rate-limited. The data below is live — reload in a moment for the full report."
+          : "Report unavailable right now.",
+      biggestStrength: "",
+      biggestWeakness: "",
+      playerToWatch: "",
+      mostImportantGame: "",
+      playoffOutlook: "",
+      degraded: true,
+    };
   }
   json.data = data;
   json.generatedAt = new Date().toISOString();

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useFavorites } from "@/components/favorites";
 
 const FIELDS: [string, string, string][] = [
@@ -14,14 +14,28 @@ export default function TeamReport({ team }: { team: string }) {
   const [r, setR] = useState<any>(null);
   const [err, setErr] = useState("");
   const { has, toggle } = useFavorites();
+  const retries = useRef(0);
 
-  useEffect(() => {
-    setR(null);
+  const load = useCallback(() => {
     fetch(`/api/team-report?team=${encodeURIComponent(team)}`)
       .then((x) => x.json())
-      .then((j) => (j.error ? setErr(j.error) : setR(j)))
+      .then((j) => {
+        if (j.error) return setErr(j.error);
+        setR(j);
+        if (j.degraded && retries.current < 3) {
+          retries.current++;
+          setTimeout(load, 9000);
+        }
+      })
       .catch((e) => setErr(e.message));
   }, [team]);
+
+  useEffect(() => {
+    retries.current = 0;
+    setR(null);
+    setErr("");
+    load();
+  }, [team, load]);
 
   return (
     <>
@@ -55,8 +69,10 @@ export default function TeamReport({ team }: { team: string }) {
             </div>
           )}
 
-          <div className="card" style={{ background: "var(--paper)", marginBottom: 16 }}>
-            <p className="label">Summary</p>
+          <div className="card accent" style={{ marginBottom: 16 }}>
+            <p className="label">
+              Summary {r.degraded && <span className="pill" style={{ marginLeft: 6, color: "var(--amber)", borderColor: "var(--amber)" }}>AI catching up…</span>}
+            </p>
             <div className="prose serif" style={{ fontSize: 18 }}>{r.summary}</div>
           </div>
 

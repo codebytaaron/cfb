@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { AI, GUARDRAILS, type ChatMessage } from "@/lib/ai";
+import { AI, GUARDRAILS, RateLimited, type ChatMessage } from "@/lib/ai";
 import { buildContext } from "@/lib/retrieval";
 
 export const maxDuration = 60;
@@ -35,11 +35,15 @@ ${context}`,
     async start(controller) {
       const enc = new TextEncoder();
       try {
-        for await (const chunk of AI.stream(convo, { temperature: 0.5, maxTokens: 800 })) {
+        for await (const chunk of AI.stream(convo, { temperature: 0.5, maxTokens: 600 })) {
           controller.enqueue(enc.encode(chunk));
         }
       } catch (e: any) {
-        controller.enqueue(enc.encode(`\n\n[error: ${e.message}]`));
+        const msg =
+          e instanceof RateLimited
+            ? "\n\n_(The AI is briefly at its free-tier rate limit — wait a few seconds and send again.)_"
+            : `\n\n_(Something went wrong: ${e.message})_`;
+        controller.enqueue(enc.encode(msg));
       }
       controller.close();
     },

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getGames } from "@/lib/cfbd";
 import { seasonContext } from "@/lib/season";
 import { analyzeGame } from "@/lib/analyst";
+import { RateLimited } from "@/lib/ai";
 
 export const maxDuration = 60;
 
@@ -18,6 +19,11 @@ export async function GET(req: NextRequest) {
       try {
         return NextResponse.json({ game: g, analysis: await analyzeGame(g, question) });
       } catch (e: any) {
+        if (e instanceof RateLimited)
+          return NextResponse.json({
+            game: g,
+            analysis: "The AI analyst is briefly at its free-tier rate limit. The box score above is live — refresh in a few seconds.",
+          });
         return NextResponse.json({ error: e.message }, { status: 500 });
       }
     }

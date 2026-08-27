@@ -142,5 +142,27 @@ td .rk { font-family: var(--mono); color: var(--ink-soft); }
 @keyframes sp { to { transform: rotate(360deg);} }
 
 .foot { border-top: 1px solid var(--line); padding: 40px 0 60px; color: var(--ink-soft); font-size: 13.5px; }
-.kv { display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px dotted var(--line); font-size:14px; }
+.kv { display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-bottom:1px dotted var(--line); font-size:14px; }
 .kv .mono { color: var(--ink-soft); }
+
+/* ---- shared page furniture ---- */
+.page-title {
+  font-family: var(--serif); font-weight: 340;
+  font-size: clamp(32px, 5vw, 44px); letter-spacing: -.02em;
+  margin: 8px 0 10px; line-height: 1.1;
+}
+.lede { color: var(--ink-soft); font-size: 17px; max-width: 640px; margin: 0 0 8px; }
+.section-label { margin-top: 30px; margin-bottom: 12px; display: block; }
+.card.accent { background: var(--paper); }
+.ul { border-bottom: 1px solid currentColor; padding-bottom: 1px; }
+.ul:hover { color: var(--red); }
+tbody tr { transition: background .12s; }
+tbody tr:hover { background: var(--paper); }
+.btn.sm { font-size: 13px; padding: 6px 13px; }
+.tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+@media (max-width: 640px){
+  body { font-size: 16px; }
+  .wrap { padding: 0 18px; }
+  .section { padding: 34px 0; }
+  .hero { padding: 56px 0 40px; }
+}
